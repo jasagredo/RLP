@@ -2,7 +2,7 @@ Name:                   RLP
 Version:                1.0.0
 Author:                 Javier Sagredo <jasagredo@gmail.com>
 Maintainer:             Javier Sagredo <jasagredo@gmail.com>
-License:                GPL-3
+License:                LGPL-3
 License-File:           LICENSE
 Homepage:		https://github.com/jasagredo/RLP
 Synopsis:               RLP serialization as defined in Ethereum Yellow Paper
