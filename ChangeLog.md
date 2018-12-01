@@ -1,5 +1,5 @@
 # Revision history for RLP
 
-## 0.0.0  -- YYYY-mm-dd
+## 1.0.0  -- 2018-12-01
 
-* First version. Released on an unsuspecting world.
+* First version.
