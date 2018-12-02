@@ -1,6 +1,6 @@
 # RLP: Recursive Length Prefix
 
-[![Build Status](https://travis-ci.org/Jasagredo/RLP.svg?branch=master)](https://github.com/Jasagredo/RLP)
+[![Build Status](https://travis-ci.org/Jasagredo/RLP.svg?branch=master)](https://travis-ci.org/Jasagredo/RLP)
 
 
 This package implements the Recursive Lenght Prefix protocol defined
