@@ -1,4 +1,10 @@
 -- |
+-- Module      : Data.Serialize.RLP
+-- License     : LGPL-3 (see LICENSE)
+--
+-- Maintainer  : Javier Sagredo <jasataco@gmail.com>
+-- Stability   : stable
+--
 -- An implementation of the Recursive Length Prefix method
 -- as described in the Yellow Paper <https://ethereum.github.io/yellowpaper/paper.pdf>.
 --
@@ -91,8 +97,8 @@ class RLPSerialize a where
 
   -- | Transform a ByteString to an 'RLPT' structure following the RLP standard and
   -- then transform it to the original type.
-  rlpDecode :: DBSL.ByteString -> a
-  rlpDecode = fromRLP . rlpDecodeI
+  rlpDecode :: DBSL.ByteString -> Maybe a
+  rlpDecode x = maybe Nothing fromRLP $ rlpDecodeI x
 
   {-# MINIMAL toRLP, fromRLP #-}
 
@@ -111,7 +117,7 @@ instance RLPSerialize DBS.ByteString where
   fromRLP _ = undefined
 
 -- Ints have to be transformed into its Big-endian form
--- and then they are trated as ByteStrings.
+-- and then they are treated as ByteStrings.
 -- The same applies for the inverse transformation. They
 -- are treated as ByteStrings and then interpreted as a
 -- Big-endian encoded Int.
@@ -119,6 +125,62 @@ instance RLPSerialize Int where
   toRLP = toRLP . toBigEndianS
 
   fromRLP = fromBigEndianS . (fromRLP :: RLPT -> DBS.ByteString)
+
+-- Serializing lists implies make a list with the serialization
+-- of each element
+instance RLPSerialize a => RLPSerialize [a] where
+  toRLP = RLPL . map toRLP
+
+  fromRLP (RLPL x) = map fromRLP x
+  fromRLP _        = undefined
+
+-- Bools are serialized as [0] or [1] in a ByteArray
+-- THIS IS AN ASUMPTION considering Bool equivalent to
+-- integers in the range 0..1
+instance RLPSerialize Bool where
+  toRLP True = RLPB $ toByteStringS "\SOH"
+  toRLP False = RLPB $ toByteStringS "\NUL"
+
+  fromRLP x
+    | x == toRLP True = True
+    | otherwise       = False
+ 
+-- Tuples are transformed into Lists
+instance (RLPSerialize a, RLPSerialize b) => RLPSerialize (a, b) where
+  toRLP (x, y) = RLPL [toRLP x, toRLP y]
+
+  fromRLP (RLPL [x, y]) = (fromRLP x, fromRLP y)
+  fromRLP _             = undefined
+
+instance (RLPSerialize a, RLPSerialize b, RLPSerialize c) => RLPSerialize (a, b, c) where
+  toRLP (x, y, z) = RLPL [toRLP x, toRLP y, toRLP z]
+
+  fromRLP (RLPL [x, y, z]) = (fromRLP x, fromRLP y, fromRLP z)
+  fromRLP _                = undefined
+
+instance (RLPSerialize a, RLPSerialize b, RLPSerialize c, RLPSerialize d) => RLPSerialize (a, b, c, d) where
+  toRLP (a1, a2, a3, a4) = RLPL [toRLP a1, toRLP a2, toRLP a3, toRLP a4]
+
+  fromRLP (RLPL [a1, a2, a3, a4]) = (fromRLP a1, fromRLP a2, fromRLP a3, fromRLP a4)
+  fromRLP _                       = undefined
+
+instance (RLPSerialize a, RLPSerialize b, RLPSerialize c, RLPSerialize d, RLPSerialize e) => RLPSerialize (a, b, c, d, e) where
+  toRLP (a1, a2, a3, a4, a5) = RLPL [toRLP a1, toRLP a2, toRLP a3, toRLP a4, toRLP a5]
+
+  fromRLP (RLPL [a1, a2, a3, a4, a5]) = (fromRLP a1, fromRLP a2, fromRLP a3, fromRLP a4, fromRLP a5)
+  fromRLP _                           = undefined
+
+instance (RLPSerialize a, RLPSerialize b, RLPSerialize c, RLPSerialize d, RLPSerialize e, RLPSerialize f) => RLPSerialize (a, b, c, d, e, f) where
+  toRLP (a1, a2, a3, a4, a5, a6) = RLPL [toRLP a1, toRLP a2, toRLP a3, toRLP a4, toRLP a5, toRLP a6]
+
+  fromRLP (RLPL [a1, a2, a3, a4, a5, a6]) = (fromRLP a1, fromRLP a2, fromRLP a3, fromRLP a4, fromRLP a5, fromRLP a6)
+  fromRLP _                               = undefined
+
+-- Needed by the default rlpDecode implementation
+instance RLPSerialize a => RLPSerialize (Maybe a) where
+  toRLP = undefined
+
+  fromRLP = Just . fromRLP
 
 --------------------------------------------------------------------------------
 
@@ -154,6 +216,6 @@ instance RLPSerialize Int where
 -- > p = Person ("John", "Snow") 33
 -- > e = rlpEncode p
 -- > -- "\204\202\132John\132Snow!" ~ [204,202,132,74,111,104,110,132,83,110,111,119,33]
--- > rlpDecode e
--- > -- Person {name = ("John","Snow"), age = 33}
+-- > rlpDecode e :: Maybe Person
+-- > -- Just (Person {name = ("John","Snow"), age = 33})
 --

@@ -14,6 +14,7 @@ Category:		Data, Parsing
 Cabal-Version:          >= 1.10
 Build-Type:             Simple
 Extra-Source-Files:     README.md, ChangeLog.md
+Tested-With:            GHC == 8.4.1, GHC == 8.6.1
 
 Library
   Default-Language:     Haskell2010

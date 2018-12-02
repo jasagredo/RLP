@@ -99,9 +99,7 @@ rlpSplit x
         let size = fromBigEndian . DBSL.take (fromIntegral sizeSize) . DBSL.tail $ x :: Int in
           let total = sizeSize + size + 1 :: Int in 
             (DBSL.take (fromIntegral total) x) : (rlpSplit $ DBSL.drop (fromIntegral total) x)
-      
 
-            
 --------------------------------------------------------------------------------
 
 -- | The 'RLPEncodeable' class groups the RLPT, ByteString and Int types
@@ -116,12 +114,17 @@ class RLPEncodeable a where
 
   -- Mainly run rlpEncodeI'
   rlpEncodeI :: a -> DBSL.ByteString
+  rlpEncodeI = runPut . rlpEncodeI'
 
   -- Use Get to parse the structure
   rlpDecodeI' :: Get a
 
   -- Mainly run rlpDecodeI'
-  rlpDecodeI :: DBSL.ByteString -> a
+  rlpDecodeI :: DBSL.ByteString -> Maybe a
+  rlpDecodeI x = let r = runGetOrFail rlpDecodeI' x in
+                   case r of
+                     Left _          -> Nothing
+                     Right (_, _, s) -> Just s
 
 --------------------------------------------------------------------------------
 -- Instances
@@ -137,26 +140,22 @@ instance RLPEncodeable RLPT where
                             where l = toBigEndian . fromIntegral . DBSL.length $ dat
     where dat = DBSL.concat . map rlpEncodeI $ t
 
-  rlpEncodeI = runPut . rlpEncodeI'
-  
   rlpDecodeI' = do
     i <- getWord8
     case () of 
       _ | i < 192 -> do         -- ByteArray
             ls <- getRemainingLazyByteString
-            return . RLPB . rlpDecodeI $ DBSL.cons i ls
+            return . RLPB . (\(Just x) -> x) . rlpDecodeI $ DBSL.cons i ls
         | i == 192 -> do        -- Empty list
             return $ RLPL []
         | i < 247 -> do         -- Small list
             ls <- getLazyByteString . fromIntegral $ i - 192
-            return $ RLPL . map rlpDecodeI . rlpSplit $ ls
+            return $ RLPL . map ((\(Just x) -> x) . rlpDecodeI) . rlpSplit $ ls
         | otherwise -> do       -- Big List
             ls <- getLazyByteString . fromIntegral $ i - 247
             let k = fromBigEndian ls
             ls' <- getLazyByteString . fromIntegral $ k
-            return $ RLPL . map rlpDecodeI . rlpSplit $ ls'
-
-  rlpDecodeI = runGet rlpDecodeI'
+            return $ RLPL . map ((\(Just x) -> x) . rlpDecodeI) . rlpSplit $ ls'
 
 instance RLPEncodeable DBS.ByteString where
   rlpEncodeI' bs
@@ -167,8 +166,6 @@ instance RLPEncodeable DBS.ByteString where
                   <> (putLazyByteString l)
                   <> (putByteString bs)
         where l = toBigEndian . DBS.length $ bs
-
-  rlpEncodeI = runPut . rlpEncodeI'
 
   rlpDecodeI' = do
     i <- getWord8
@@ -183,16 +180,9 @@ instance RLPEncodeable DBS.ByteString where
             return ls
         | otherwise -> undefined
 
-  rlpDecodeI = runGet rlpDecodeI'
-
-
 instance RLPEncodeable Int where
   rlpEncodeI' = rlpEncodeI' . DBSL.toStrict . toBigEndian
-
-  rlpEncodeI = runPut . rlpEncodeI'
 
   rlpDecodeI' = do
     b <- rlpDecodeI' :: Get DBS.ByteString
     return . fromBigEndian . DBSL.fromStrict $ b
-
-  rlpDecodeI = runGet rlpDecodeI'
