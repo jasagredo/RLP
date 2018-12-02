@@ -1,21 +1,9 @@
-# RLP
+# RLP: Recursive Length Prefix
 
-TODO: Write description here
+This package implements the Recursive Lenght Prefix protocol defined
+in the [Ethereum Yellow Paper](https://ethereum.github.io/yellowpaper/paper.pdf)
+used for serializing and deserializing structures into an array of bytes.
 
-## Installation
+For more information, please check the documentation.
 
-TODO: Write installation instructions here
-
-## Usage
-
-TODO: Write usage instructions here
-
-## How to run tests
-
-```
-cabal configure --enable-tests && cabal build && cabal test
-```
-
-## Contributing
-
-TODO: Write contribution instructions here
+Feel free to contribute.
