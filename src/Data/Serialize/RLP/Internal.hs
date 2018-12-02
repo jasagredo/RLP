@@ -37,7 +37,7 @@ import qualified Data.ByteString.Lazy.Char8   as DBSLC
 -- RLPT represents the T type defined in the Ethereum Yellowpaper for
 -- defining the RLP protocol.
 data RLPT = RLPL [RLPT] | RLPB DBS.ByteString
-  deriving (Show) -- just for understanding pourposes
+  deriving (Show, Eq) -- just for understanding pourposes and for checking with hspec
 
 --------------------------------------------------------------------------------
 
@@ -73,6 +73,35 @@ fromByteString = DBSLC.unpack
 fromByteStringS :: DBS.ByteString -> String
 fromByteStringS = DBSC.unpack
 
+-- | Internal function for spliting the array in chunks of bytes
+rlpSplit :: DBSL.ByteString -> [DBSL.ByteString]
+rlpSplit x
+  | DBSL.null x        = []
+  | DBSL.head x <  192 =
+      case () of
+        _ | DBSL.head x < 128 -> (DBSL.singleton . DBSL.head $ x) : (rlpSplit $ DBSL.tail x)
+          | DBSL.head x < 183 ->
+              let size = (fromIntegral $ DBSL.head x) - 128 :: Int in
+                let total = size + 1 in
+                  (DBSL.take (fromIntegral total) x) : (rlpSplit $ DBSL.drop (fromIntegral total) x)
+          | otherwise        ->
+                    let sizeSize = (fromIntegral $ DBSL.head x) - 183 :: Int in
+                      let size = fromBigEndian . DBSL.take (fromIntegral sizeSize) . DBSL.tail $ x :: Int in
+                        let total = sizeSize + size + 1 :: Int in 
+                          (DBSL.take (fromIntegral total) x) : (rlpSplit $ DBSL.drop (fromIntegral total) x)
+  | DBSL.head x == 192 = (DBSL.singleton $ DBSL.head x) : (rlpSplit $ DBSL.tail x)
+  | DBSL.head x <  247 =
+      let size = (fromIntegral $ DBSL.head x) - 192 :: Int in
+        let total = size + 1 in
+          (DBSL.take (fromIntegral total) x) : (rlpSplit $ DBSL.drop (fromIntegral total) x)
+  | otherwise          =
+      let sizeSize = (fromIntegral $ DBSL.head x) - 247 :: Int in
+        let size = fromBigEndian . DBSL.take (fromIntegral sizeSize) . DBSL.tail $ x :: Int in
+          let total = sizeSize + size + 1 :: Int in 
+            (DBSL.take (fromIntegral total) x) : (rlpSplit $ DBSL.drop (fromIntegral total) x)
+      
+
+            
 --------------------------------------------------------------------------------
 
 -- | The 'RLPEncodeable' class groups the RLPT, ByteString and Int types
@@ -113,49 +142,20 @@ instance RLPEncodeable RLPT where
   rlpDecodeI' = do
     i <- getWord8
     case () of 
-      _ | i < 192 -> do
-            ls <- case () of
-                    _ | i < 128   -> do
-                          return $ DBSL.singleton i 
-                      | i < 183   -> getLazyByteString . fromIntegral $ i - 128
-                      | otherwise -> do
-                          aux  <- getLazyByteString . fromIntegral $ i - 183
-                          aux' <- getLazyByteString . fromIntegral . fromBigEndian $ aux
-                          return $ DBSL.append aux $ aux'
-            let ls' =  RLPB . rlpDecodeI $ DBSL.cons i ls
-            b <- isEmpty :: Get Bool
-            case b of
-              True -> return ls'
-              _    -> do
-                         ls'' <- rlpDecodeI' :: Get RLPT
-                         case ls'' of
-                           RLPB _ -> return $ RLPL [ls', ls'']
-                           RLPL _ -> return $ RLPL [ls', ls'']
-        | i < 247 -> do
+      _ | i < 192 -> do         -- ByteArray
+            ls <- getRemainingLazyByteString
+            return . RLPB . rlpDecodeI $ DBSL.cons i ls
+        | i == 192 -> do        -- Empty list
+            return $ RLPL []
+        | i < 247 -> do         -- Small list
             ls <- getLazyByteString . fromIntegral $ i - 192
-            let k = rlpDecodeI ls :: RLPT
-            b <- isEmpty :: Get Bool
-            case b of
-              True -> return k
-              _ -> do
-                ls' <- rlpDecodeI' :: Get RLPT
-                case ls' of
-                  RLPB _ -> return $ RLPL [k, ls']
-                  RLPL t -> return $ RLPL $ k:t
-        | otherwise -> do
+            return $ RLPL . map rlpDecodeI . rlpSplit $ ls
+        | otherwise -> do       -- Big List
             ls <- getLazyByteString . fromIntegral $ i - 247
             let k = fromBigEndian ls
             ls' <- getLazyByteString . fromIntegral $ k
-            let k' = rlpDecodeI ls' :: RLPT
-            b <- isEmpty :: Get Bool
-            case b of
-              True -> return k'
-              _ -> do
-                ls'' <- rlpDecodeI' :: Get RLPT
-                case ls'' of
-                  RLPB _ -> return $ RLPL [k', ls'']
-                  RLPL t -> return $ RLPL $ k':t
-         
+            return $ RLPL . map rlpDecodeI . rlpSplit $ ls'
+
   rlpDecodeI = runGet rlpDecodeI'
 
 instance RLPEncodeable DBS.ByteString where
