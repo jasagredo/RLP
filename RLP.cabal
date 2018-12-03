@@ -37,9 +37,10 @@ Test-Suite spec
                       , Data.Serialize.RLP
                       , Data.Serialize.RLP.Internal
   Build-Depends:        base
-                      , hspec
-                      , bytestring >= 0.10 && < 0.11
-                      , binary >= 0.8 && < 0.9
+                      , hspec >= 2.6 && < 2.7
+                      , binary
+                      , bytestring
+
 
 Source-Repository head
   Type:                 git

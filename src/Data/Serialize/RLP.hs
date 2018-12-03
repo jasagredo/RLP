@@ -9,7 +9,7 @@
 -- as described in the Yellow Paper <https://ethereum.github.io/yellowpaper/paper.pdf>.
 --
 -- To actually use this module, the type that is going to
--- be encoded has to be instance of the RLPSerialize defining
+-- be encoded has to be instance of RLPSerialize defining
 -- 'toRLP' and 'fromRLP'.
 --------------------------------------------------------------------------------
 
@@ -126,7 +126,7 @@ instance RLPSerialize Int where
 
   fromRLP = fromBigEndianS . (fromRLP :: RLPT -> DBS.ByteString)
 
--- Serializing lists implies make a list with the serialization
+-- Serializing lists implies making a list with the serialization
 -- of each element
 instance RLPSerialize a => RLPSerialize [a] where
   toRLP = RLPL . map toRLP
@@ -144,7 +144,14 @@ instance RLPSerialize Bool where
   fromRLP x
     | x == toRLP True = True
     | otherwise       = False
- 
+
+-- Chars are just length-one strings
+instance RLPSerialize Char where
+  toRLP = RLPB . toByteStringS . (: [])
+
+  fromRLP (RLPB x) = head $ fromByteStringS x
+  fromRLP _        = undefined
+
 -- Tuples are transformed into Lists
 instance (RLPSerialize a, RLPSerialize b) => RLPSerialize (a, b) where
   toRLP (x, y) = RLPL [toRLP x, toRLP y]
