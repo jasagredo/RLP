@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 -- |
 -- Module      : Data.Serialize.RLP
 -- License     : LGPL-3 (see LICENSE)
@@ -128,7 +129,7 @@ instance RLPSerialize Int where
 
 -- Serializing lists implies making a list with the serialization
 -- of each element
-instance RLPSerialize a => RLPSerialize [a] where
+instance {-# OVERLAPPABLE #-} RLPSerialize a => RLPSerialize [a] where
   toRLP = RLPL . map toRLP
 
   fromRLP (RLPL x) = map fromRLP x
@@ -144,6 +145,13 @@ instance RLPSerialize Bool where
   fromRLP x
     | x == toRLP True = True
     | otherwise       = False
+
+-- Strings are serialized as ByteStrings
+instance {-# OVERLAPPING #-} RLPSerialize String where
+  toRLP = RLPB . toByteStringS
+  
+  fromRLP (RLPB x) = fromByteStringS x
+  fromRLP _        = undefined
 
 -- Chars are just length-one strings
 instance RLPSerialize Char where
