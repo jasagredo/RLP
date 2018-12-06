@@ -11,3 +11,5 @@ cabal-dev
 .hsenv
 .cabal-sandbox/
 cabal.sandbox.config
+.ghc*
+dist-newstyle
