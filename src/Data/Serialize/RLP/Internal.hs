@@ -12,6 +12,8 @@ module Data.Serialize.RLP.Internal (
   toByteStringS,
   fromByteString,
   fromByteStringS,
+
+  unJust,
       
   RLPT(..)
       ) where
@@ -23,6 +25,8 @@ import qualified Data.ByteString              as DBS
 import qualified Data.ByteString.Char8        as DBSC
 import qualified Data.ByteString.Lazy         as DBSL
 import qualified Data.ByteString.Lazy.Char8   as DBSLC
+import qualified Data.List                    as DL
+
 
 --------------------------------------------------------------------------------
 
@@ -48,15 +52,18 @@ toBigEndian = DBSLC.dropWhile (== '\NUL') . runPut . putInt64be . fromIntegral
 toBigEndianS :: Int -> DBS.ByteString
 toBigEndianS = DBSL.toStrict . toBigEndian
 
-fromBigEndian :: DBSL.ByteString -> Int
-fromBigEndian bs =  fromIntegral . runGet getInt64be $ bs'
+fromBigEndian :: DBSL.ByteString -> Either String Int
+fromBigEndian bs =  case bs'' of
+                      Left (_, _, msg) -> Left ("can't decode from Big-Endian: " ++ msg)
+                      Right (_, _, a)  -> Right $ fromIntegral a
   where bs' = case () of
           _ | DBSL.length bs >= 8 -> bs
             | otherwise -> DBSLC.append (DBSLC.pack $ b) bs
                      where b = take (8 - (fromIntegral . DBSL.length $ bs)) (repeat '\NUL')
+        bs'' = runGetOrFail getInt64be $ bs'
                            
 -- | Strict version of 'fromBigEndian'
-fromBigEndianS :: DBS.ByteString -> Int
+fromBigEndianS :: DBS.ByteString -> Either String Int
 fromBigEndianS = fromBigEndian . DBSL.fromStrict
 
 toByteString :: String -> DBSL.ByteString
@@ -74,31 +81,63 @@ fromByteStringS :: DBS.ByteString -> String
 fromByteStringS = DBSC.unpack
 
 -- | Internal function for spliting the array in chunks of bytes
-rlpSplit :: DBSL.ByteString -> [DBSL.ByteString]
+rlpSplit :: DBSL.ByteString -> Either String [DBSL.ByteString]
 rlpSplit x
-  | DBSL.null x        = []
+  | DBSL.null x        = Right []
   | DBSL.head x <  192 =
       case () of
-        _ | DBSL.head x < 128 -> (DBSL.singleton . DBSL.head $ x) : (rlpSplit $ DBSL.tail x)
+        _ | DBSL.head x < 128 ->
+              let aux = rlpSplit $ DBSL.tail x in
+                  case aux of
+                    Left m  -> Left m
+                    Right v -> Right $ (DBSL.singleton . DBSL.head $ x) : v
           | DBSL.head x < 183 ->
               let size = (fromIntegral $ DBSL.head x) - 128 :: Int in
                 let total = size + 1 in
-                  (DBSL.take (fromIntegral total) x) : (rlpSplit $ DBSL.drop (fromIntegral total) x)
+                  let aux = rlpSplit $ DBSL.drop (fromIntegral total) x in
+                    case aux of
+                      Left m  -> Left m
+                      Right v -> Right $ (DBSL.take (fromIntegral total) x) : v
           | otherwise        ->
-                    let sizeSize = (fromIntegral $ DBSL.head x) - 183 :: Int in
-                      let size = fromBigEndian . DBSL.take (fromIntegral sizeSize) . DBSL.tail $ x :: Int in
-                        let total = sizeSize + size + 1 :: Int in 
-                          (DBSL.take (fromIntegral total) x) : (rlpSplit $ DBSL.drop (fromIntegral total) x)
-  | DBSL.head x == 192 = (DBSL.singleton $ DBSL.head x) : (rlpSplit $ DBSL.tail x)
+              let sizeSize = (fromIntegral $ DBSL.head x) - 183 :: Int in
+                let size = fromBigEndian . DBSL.take (fromIntegral sizeSize) . DBSL.tail $ x in
+                  case size of
+                    Left m  -> Left m
+                    Right v ->
+                      let total = sizeSize + v + 1 :: Int in
+                        let aux = rlpSplit $ DBSL.drop (fromIntegral total) x in
+                            case aux of
+                              Left m  -> Left m
+                              Right v' -> Right $ (DBSL.take (fromIntegral total) x) : v'
+  | DBSL.head x == 192 =
+    let aux = (rlpSplit $ DBSL.tail x) in
+      case aux of
+        Left m  -> Left m
+        Right v -> Right $ (DBSL.singleton $ DBSL.head x) : v
   | DBSL.head x <  247 =
       let size = (fromIntegral $ DBSL.head x) - 192 :: Int in
         let total = size + 1 in
-          (DBSL.take (fromIntegral total) x) : (rlpSplit $ DBSL.drop (fromIntegral total) x)
+          let aux = rlpSplit $ DBSL.drop (fromIntegral total) x in
+            case aux of
+              Left m  -> Left m
+              Right v -> Right $ (DBSL.take (fromIntegral total) x) : v
+          
   | otherwise          =
       let sizeSize = (fromIntegral $ DBSL.head x) - 247 :: Int in
-        let size = fromBigEndian . DBSL.take (fromIntegral sizeSize) . DBSL.tail $ x :: Int in
-          let total = sizeSize + size + 1 :: Int in 
-            (DBSL.take (fromIntegral total) x) : (rlpSplit $ DBSL.drop (fromIntegral total) x)
+        let size = fromBigEndian . DBSL.take (fromIntegral sizeSize) . DBSL.tail $ x in
+          case size of
+            Left m  -> Left m
+            Right v -> 
+              let total = sizeSize + v + 1 :: Int in
+                let aux = rlpSplit $ DBSL.drop (fromIntegral total) x in
+                  case aux of
+                    Left m  -> Left m
+                    Right v' -> Right $ (DBSL.take (fromIntegral total) x) : v'
+
+-- Just for internal porpouses
+unJust :: Maybe a -> a
+unJust (Just x) = x
+unJust _        = undefined
 
 --------------------------------------------------------------------------------
 
@@ -120,11 +159,11 @@ class RLPEncodeable a where
   rlpDecodeI' :: Get a
 
   -- Mainly run rlpDecodeI'
-  rlpDecodeI :: DBSL.ByteString -> Maybe a
+  rlpDecodeI :: DBSL.ByteString -> Either String a
   rlpDecodeI x = let r = runGetOrFail rlpDecodeI' x in
                    case r of
-                     Left _          -> Nothing
-                     Right (_, _, s) -> Just s
+                     Left (_, _, m)  -> Left m
+                     Right (_, _, s) -> Right s
 
 --------------------------------------------------------------------------------
 -- Instances
@@ -145,17 +184,43 @@ instance RLPEncodeable RLPT where
     case () of 
       _ | i < 192 -> do         -- ByteArray
             ls <- getRemainingLazyByteString
-            return . RLPB . (\(Just x) -> x) . rlpDecodeI $ DBSL.cons i ls
+            let r = rlpDecodeI $ DBSL.cons i ls
+            case r of
+              Left m  -> fail m
+              Right v -> return . RLPB $ v
         | i == 192 -> do        -- Empty list
             return $ RLPL []
         | i < 247 -> do         -- Small list
             ls <- getLazyByteString . fromIntegral $ i - 192
-            return $ RLPL . map ((\(Just x) -> x) . rlpDecodeI) . rlpSplit $ ls
+            let k = rlpSplit ls
+            case k of
+              Left m  -> fail m
+              Right v -> do
+                let k' = map rlpDecodeI v
+                let k'' = map (\e -> case e of
+                                  Left m  -> m
+                                  Right _ -> "") k'
+                case all null k'' of
+                  True -> return $ RLPL . map (\(Right x) -> x) $ k'
+                  _    -> fail (DL.intercalate ", " k'')
         | otherwise -> do       -- Big List
             ls <- getLazyByteString . fromIntegral $ i - 247
             let k = fromBigEndian ls
-            ls' <- getLazyByteString . fromIntegral $ k
-            return $ RLPL . map ((\(Just x) -> x) . rlpDecodeI) . rlpSplit $ ls'
+            case k of
+              Left m  -> fail m
+              Right v -> do
+                ls' <- getLazyByteString . fromIntegral $ v
+                let k' = rlpSplit ls'
+                case k' of
+                  Left m'  -> fail m'
+                  Right v' -> do
+                    let k'' = map rlpDecodeI v'
+                    let k'3 = map (\e -> case e of
+                                  Left m  -> m
+                                  Right _ -> "") k''
+                    case all null k'3 of
+                      True -> return $ RLPL . map (\(Right x) -> x) $ k''
+                      _    -> fail (DL.intercalate ", " k'3)
 
 instance RLPEncodeable DBS.ByteString where
   rlpEncodeI' bs
@@ -176,13 +241,20 @@ instance RLPEncodeable DBS.ByteString where
             return ls
         | i < 192 -> do
             sbe <- getLazyByteString . fromIntegral $ i - 183
-            ls <- getByteString . fromBigEndian $ sbe
-            return ls
-        | otherwise -> undefined
+            let k = fromBigEndian sbe
+            case k of
+              Left m  -> fail m
+              Right v -> do
+                ls <- getByteString v
+                return ls
+        | otherwise -> fail "Decoding a ByteString with head >= 192"
 
 instance RLPEncodeable Int where
-  rlpEncodeI' = rlpEncodeI' . DBSL.toStrict . toBigEndian
+  rlpEncodeI' = rlpEncodeI' . toBigEndianS
 
   rlpDecodeI' = do
     b <- rlpDecodeI' :: Get DBS.ByteString
-    return . fromBigEndian . DBSL.fromStrict $ b
+    let k = fromBigEndianS b
+    case k of
+      Left m  -> fail m
+      Right v -> return v

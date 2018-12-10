@@ -37,6 +37,9 @@ module Data.Serialize.RLP (
   -- * Example
   -- $example
   
+  -- * Errors and special cases
+  -- $failexample
+  
 ) where
 
 import Data.Serialize.RLP.Internal
@@ -64,10 +67,14 @@ import qualified Data.ByteString.Lazy         as DBSL
 -- understanding of the generated code.
 --
 -- It is important to remark that although it can't be imposed, it doesn't make sense to try
--- to transform to RLP types with more than one constructor. The transformation should encode
+-- to transform to RLP types with more than one constructor that don't difer in structure.
+-- The transformation should encode 
 -- a way to find out which of the constructors belongs to the data so not only data is being
 -- encoded in the result, also information about the structure futher than the actual length
 -- prefixes. That's why it only makes sense to transform to RLP types with just one constructor.
+-- On the other hand, it's perfectly viable to encode types with more than one constructor if
+-- the structure of each of them is different as it can be adjusted via pattern matching
+-- strategies.
 
 --------------------------------------------------------------------------------
 
@@ -75,7 +82,7 @@ import qualified Data.ByteString.Lazy         as DBSL
 -- For encoding and decoding values with the RLP protocol, 'toRLP' and 'fromRLP' have to
 -- be implemented.
 --
--- Instances of RLPSerialize have to satisfy the following property:
+-- Instances of RLPSerialize are expected to satisfy the following property:
 --
 -- > fromRLP . toRLP == id
 --
@@ -88,8 +95,9 @@ import qualified Data.ByteString.Lazy         as DBSL
 class RLPSerialize a where
   -- | Transform a value to the 'RLPT' structure that best fits its internal structure
   toRLP :: a -> RLPT
-  -- | Transform an 'RLPT' structure back into the value it represents
-  fromRLP :: RLPT -> a
+  -- | Transform an 'RLPT' structure back into the value it represents.
+  -- Its return type is 'Maybe a' because it can fail
+  fromRLP :: RLPT -> Maybe a
 
   -- | Transform a value to an 'RLPT' structure and then encode it following the
   -- RLP standard.
@@ -97,9 +105,15 @@ class RLPSerialize a where
   rlpEncode = rlpEncodeI . toRLP
 
   -- | Transform a ByteString to an 'RLPT' structure following the RLP standard and
-  -- then transform it to the original type.
-  rlpDecode :: DBSL.ByteString -> Maybe a
-  rlpDecode x = maybe Nothing fromRLP $ rlpDecodeI x
+  -- then transform it to the original type. It returns 'Left s' when failing on the
+  -- decoding of the transforming from RLPT into the required type, and 'Right v' on
+  -- success.
+  rlpDecode :: DBSL.ByteString -> Either String a
+  rlpDecode x = case rlpDecodeI x :: Either String RLPT of
+                  Left m  -> Left m
+                  Right v -> case fromRLP v of
+                    Nothing -> Left "RLPT value couldn't ve transformed into the required type"
+                    Just v' -> Right v'
 
   {-# MINIMAL toRLP, fromRLP #-}
 
@@ -107,15 +121,15 @@ class RLPSerialize a where
 instance RLPSerialize RLPT where
   toRLP = id
 
-  fromRLP = id
+  fromRLP = Just . id
 
 -- ByteStrings just have to be encapsulated
 -- Also, it only makes sense to disencapsulate from a ByteString
 instance RLPSerialize DBS.ByteString where
   toRLP = RLPB
 
-  fromRLP (RLPB b) = b
-  fromRLP _ = undefined
+  fromRLP (RLPB b) = Just b
+  fromRLP _ = Nothing
 
 -- Ints have to be transformed into its Big-endian form
 -- and then they are treated as ByteStrings.
@@ -125,15 +139,22 @@ instance RLPSerialize DBS.ByteString where
 instance RLPSerialize Int where
   toRLP = toRLP . toBigEndianS
 
-  fromRLP = fromBigEndianS . (fromRLP :: RLPT -> DBS.ByteString)
+  fromRLP =  maybe Nothing (\s -> case fromBigEndianS s of
+                               Left _  -> Nothing
+                               Right v -> Just v ) . (fromRLP :: RLPT -> Maybe DBS.ByteString)
 
 -- Serializing lists implies making a list with the serialization
 -- of each element
 instance {-# OVERLAPPABLE #-} RLPSerialize a => RLPSerialize [a] where
   toRLP = RLPL . map toRLP
 
-  fromRLP (RLPL x) = map fromRLP x
-  fromRLP _        = undefined
+  fromRLP (RLPL x) = if any (\a -> case a of
+                                Nothing -> True
+                                _ -> False) r
+                     then Nothing
+                     else Just $ map unJust r
+    where r = map fromRLP x
+  fromRLP _        = Nothing
 
 -- Bools are serialized as [0] or [1] in a ByteArray
 -- THIS IS AN ASUMPTION considering Bool equivalent to
@@ -143,59 +164,99 @@ instance RLPSerialize Bool where
   toRLP False = RLPB $ toByteStringS "\NUL"
 
   fromRLP x
-    | x == toRLP True = True
-    | otherwise       = False
+    | x == toRLP True  = Just True
+    | x == toRLP False = Just False
+    | otherwise        = Nothing
 
 -- Strings are serialized as ByteStrings
 instance {-# OVERLAPPING #-} RLPSerialize String where
   toRLP = RLPB . toByteStringS
   
-  fromRLP (RLPB x) = fromByteStringS x
-  fromRLP _        = undefined
+  fromRLP (RLPB x) = Just $ fromByteStringS x
+  fromRLP _        = Nothing
 
 -- Chars are just length-one strings
 instance RLPSerialize Char where
   toRLP = RLPB . toByteStringS . (: [])
 
-  fromRLP (RLPB x) = head $ fromByteStringS x
-  fromRLP _        = undefined
+  fromRLP (RLPB x) = Just $ head $ fromByteStringS x
+  fromRLP _        = Nothing
 
 -- Tuples are transformed into Lists
 instance (RLPSerialize a, RLPSerialize b) => RLPSerialize (a, b) where
   toRLP (x, y) = RLPL [toRLP x, toRLP y]
 
-  fromRLP (RLPL [x, y]) = (fromRLP x, fromRLP y)
-  fromRLP _             = undefined
+  fromRLP (RLPL [x, y]) =
+    maybe Nothing
+     (\x' -> maybe Nothing
+       (\y' -> Just (x', y'))
+       (fromRLP y))
+     (fromRLP x)
+  fromRLP _             = Nothing
 
 instance (RLPSerialize a, RLPSerialize b, RLPSerialize c) => RLPSerialize (a, b, c) where
   toRLP (x, y, z) = RLPL [toRLP x, toRLP y, toRLP z]
 
-  fromRLP (RLPL [x, y, z]) = (fromRLP x, fromRLP y, fromRLP z)
-  fromRLP _                = undefined
-
+  fromRLP (RLPL [x, y, z]) =
+    maybe Nothing
+     (\x' -> maybe Nothing
+       (\y' -> maybe Nothing
+         (\z' -> Just (x', y', z'))
+         (fromRLP z))
+       (fromRLP y))
+     (fromRLP x)
+  fromRLP _             = Nothing
+ 
 instance (RLPSerialize a, RLPSerialize b, RLPSerialize c, RLPSerialize d) => RLPSerialize (a, b, c, d) where
   toRLP (a1, a2, a3, a4) = RLPL [toRLP a1, toRLP a2, toRLP a3, toRLP a4]
 
-  fromRLP (RLPL [a1, a2, a3, a4]) = (fromRLP a1, fromRLP a2, fromRLP a3, fromRLP a4)
-  fromRLP _                       = undefined
+  fromRLP (RLPL [a1, a2, a3, a4]) =
+    maybe Nothing
+     (\a1' -> maybe Nothing
+      (\a2' -> maybe Nothing
+       (\a3' -> maybe Nothing
+        (\a4' -> Just (a1', a2', a3', a4'))
+        (fromRLP a4))
+       (fromRLP a3))
+      (fromRLP a2))
+     (fromRLP a1)
+  fromRLP _             = Nothing
 
 instance (RLPSerialize a, RLPSerialize b, RLPSerialize c, RLPSerialize d, RLPSerialize e) => RLPSerialize (a, b, c, d, e) where
   toRLP (a1, a2, a3, a4, a5) = RLPL [toRLP a1, toRLP a2, toRLP a3, toRLP a4, toRLP a5]
 
-  fromRLP (RLPL [a1, a2, a3, a4, a5]) = (fromRLP a1, fromRLP a2, fromRLP a3, fromRLP a4, fromRLP a5)
-  fromRLP _                           = undefined
+  fromRLP (RLPL [a1, a2, a3, a4, a5]) =
+    maybe Nothing
+     (\a1' -> maybe Nothing
+      (\a2' -> maybe Nothing
+       (\a3' -> maybe Nothing
+        (\a4' -> maybe Nothing
+         (\a5' -> Just (a1', a2', a3', a4', a5'))
+         (fromRLP a5))
+        (fromRLP a4))
+       (fromRLP a3))
+      (fromRLP a2))
+     (fromRLP a1)
+  fromRLP _             = Nothing
 
 instance (RLPSerialize a, RLPSerialize b, RLPSerialize c, RLPSerialize d, RLPSerialize e, RLPSerialize f) => RLPSerialize (a, b, c, d, e, f) where
   toRLP (a1, a2, a3, a4, a5, a6) = RLPL [toRLP a1, toRLP a2, toRLP a3, toRLP a4, toRLP a5, toRLP a6]
 
-  fromRLP (RLPL [a1, a2, a3, a4, a5, a6]) = (fromRLP a1, fromRLP a2, fromRLP a3, fromRLP a4, fromRLP a5, fromRLP a6)
-  fromRLP _                               = undefined
-
--- Needed by the default rlpDecode implementation
-instance RLPSerialize a => RLPSerialize (Maybe a) where
-  toRLP = undefined
-
-  fromRLP = Just . fromRLP
+  fromRLP (RLPL [a1, a2, a3, a4, a5, a6]) =
+    maybe Nothing
+     (\a1' -> maybe Nothing
+      (\a2' -> maybe Nothing
+       (\a3' -> maybe Nothing
+        (\a4' -> maybe Nothing
+         (\a5' -> maybe Nothing
+          (\a6' -> Just (a1', a2', a3', a4', a5', a6'))
+          (fromRLP a6))
+         (fromRLP a5))
+        (fromRLP a4))
+       (fromRLP a3))
+      (fromRLP a2))
+     (fromRLP a1)
+  fromRLP _             = Nothing
 
 --------------------------------------------------------------------------------
 
@@ -213,24 +274,61 @@ instance RLPSerialize a => RLPSerialize (Maybe a) where
 --
 -- Then we have to make it an instance of RLPSerialize:
 --  
--- > instance RLPSerialize Person where
--- >   toRLP p = RLPL [
--- >                 RLPL [
--- >                     toRLP . toByteStringS . fst . name $ p,
--- >                     toRLP . toByteStringS . snd . name $ p
--- >                     ],
--- >                 toRLP . age $ p]
--- > 
--- >   fromRLP (RLPL [ RLPL [ RLPB a, RLPB b ], RLPB c ]) =
--- >          Person (fromByteStringS a, fromByteStringS b) (fromBigEndianS c :: Int)
+-- >instance RLPSerialize Person where
+-- >  toRLP p = RLPL [
+-- >                RLPL [
+-- >                    toRLP . toByteStringS . fst . name $ p,
+-- >                    toRLP . toByteStringS . snd . name $ p
+-- >                    ],
+-- >                toRLP . age $ p]
+-- >
+-- >  fromRLP (RLPL [ RLPL [ RLPB a, RLPB b ], RLPB c ]) =
+-- >    case fromBigEndianS c of
+-- >      Right v -> Just $ Person (fromByteStringS a, fromByteStringS b) v
+-- >      _       -> Nothing
+-- >  fromRLP _ = Nothing
 -- 
--- This way, if the decoding gives rise to other structure than the expected, a runtime
--- exception will be thrown by the pattern matching. We can now use our decoder and encoder
+-- This way, if the decoding gives rise to other structure than the expected, a the
+-- resulting value would be 'Nothing'. We can now use our decoder and encoder
 -- with our custom type:
 --
 -- > p = Person ("John", "Snow") 33
 -- > e = rlpEncode p
 -- > -- "\204\202\132John\132Snow!" ~ [204,202,132,74,111,104,110,132,83,110,111,119,33]
 -- > rlpDecode e :: Maybe Person
--- > -- Just (Person {name = ("John","Snow"), age = 33})
+-- > -- Right (Person {name = ("John","Snow"), age = 33})
 --
+
+--------------------------------------------------------------------------------
+
+-- $failexample
+-- In case we run into an error situation, depending whether the RLPT structure is not well
+-- formed or the generated structure couldn't be transformed into the expected type, an error
+-- is returned in the form of a 'Left' value.
+--
+-- Just to see this as an example, if we chop the resulting ByteString, there's no way to
+-- generate a correct RLPT structure so an error is thrown:
+--
+-- > rlpDecode $ DBSL.take 6 $ rlpEncode $ RLPL [ RLPB $ toByteStringS "John", RLPB $ toByteStringS "Snow" ] :: Either String RLPT
+-- > -- Left "not enough bytes"
+--
+-- On the other hand, if we try to transform an incorrect value from the decoded RLPT we
+-- generate a new error:
+--
+-- > rlpDecode $ rlpEncode $ RLPB $ toByteStringS "\STX" :: Either String Bool
+-- > -- Left "RLPT value couldn't ve transformed into the required type"
+--
+-- If a ByteString is the result of the concatenation of more than one serialized RLPT structure,
+-- only the first one would be decoded:
+--
+-- > rlpDecode $ rlpEncode $ RLPB $ toByteStringS "\STX" :: Either String Bool
+-- > -- Left "RLPT value couldn't ve transformed into the required type"
+--
+-- If a ByteString is the result of the concatenation of more than one serialized RLPT structure,
+-- only the first one would be decoded:
+--
+-- > a = rlpEncode $ RLPL [ RLPB $ toByteStringS "John", RLPB $ toByteStringS "Snow" ]
+-- > b = DBSL.append a a
+-- > -- "\202\132John\132Snow\202\132John\132Snow"
+-- > rlpDecode b :: Either String RLPT
+-- > -- Right (RLPL [RLPB "John",RLPB "Snow"])
