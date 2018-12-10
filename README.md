@@ -9,4 +9,12 @@ used for serializing and deserializing structures into an array of bytes.
 
 For more information, please check the haddock documentation (can be generated running `cabal haddock` on the root of the repo).
 
-Feel free to contribute.
+## Installation
+
+On 1.1.0 error handling was coded as a safe way to fail on the decoding through Eithers. Usage of >=1.1 is quite advised.
+
+Installation can be easily done through `cabal` as the package is in Hackage. `cabal install RLP` should be enough.
+
+## Contribuition
+
+Feel free to contribute. I think the error handling part could be improved.
