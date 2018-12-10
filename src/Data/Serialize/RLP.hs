@@ -46,6 +46,7 @@ import Data.Serialize.RLP.Internal
 
 import qualified Data.ByteString              as DBS
 import qualified Data.ByteString.Lazy         as DBSL
+import qualified Data.ByteString.Char8        as DBSC
 
 --------------------------------------------------------------------------------
 
@@ -139,9 +140,12 @@ instance RLPSerialize DBS.ByteString where
 instance RLPSerialize Int where
   toRLP = toRLP . toBigEndianS
 
-  fromRLP =  maybe Nothing (\s -> case fromBigEndianS s of
-                               Left _  -> Nothing
-                               Right v -> Just v ) . (fromRLP :: RLPT -> Maybe DBS.ByteString)
+  fromRLP =  maybe Nothing (\s -> if DBSC.head s == '\NUL'
+                                  then Nothing
+                                  else case fromBigEndianS s of
+                                         Left _  -> Nothing
+                                         Right v -> Just v ) .
+             (fromRLP :: RLPT -> Maybe DBS.ByteString)
 
 -- Serializing lists implies making a list with the serialization
 -- of each element
@@ -319,13 +323,7 @@ instance (RLPSerialize a, RLPSerialize b, RLPSerialize c, RLPSerialize d, RLPSer
 -- > -- Left "RLPT value couldn't ve transformed into the required type"
 --
 -- If a ByteString is the result of the concatenation of more than one serialized RLPT structure,
--- only the first one would be decoded:
---
--- > rlpDecode $ rlpEncode $ RLPB $ toByteStringS "\STX" :: Either String Bool
--- > -- Left "RLPT value couldn't ve transformed into the required type"
---
--- If a ByteString is the result of the concatenation of more than one serialized RLPT structure,
--- only the first one would be decoded:
+-- only the first one would be decoded. This isn't quite specified in the Yellow Paper although it is possible that an error should be thrown when finding trailing bytes:
 --
 -- > a = rlpEncode $ RLPL [ RLPB $ toByteStringS "John", RLPB $ toByteStringS "Snow" ]
 -- > b = DBSL.append a a

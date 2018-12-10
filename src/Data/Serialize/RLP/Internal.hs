@@ -254,7 +254,10 @@ instance RLPEncodeable Int where
 
   rlpDecodeI' = do
     b <- rlpDecodeI' :: Get DBS.ByteString
-    let k = fromBigEndianS b
-    case k of
-      Left m  -> fail m
-      Right v -> return v
+    case DBSC.head b of
+      '\NUL' -> fail "leading zeroes found when decoding an integer"
+      _      -> do
+        let k = fromBigEndianS b
+        case k of
+          Left m  -> fail m
+          Right v -> return v
